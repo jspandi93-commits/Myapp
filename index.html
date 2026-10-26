@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My App</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, Roboto, sans-serif; background:#f2f4f7; color:#1b2430; padding-bottom:84px; }
+  header { padding:16px; font-weight:700; font-size:18px; background:#fff; border-bottom:1px solid #dde2e8; }
+  #content { background:#fff; margin:12px; padding:20px; border-radius:10px; }
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid #dde2e8; }
+  .actions { position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:12px; background:#fff; border-top:1px solid #dde2e8; }
+  .actions button { flex:1; padding:14px 6px; border:0; border-radius:10px; font-size:15px; font-weight:600; background:#1f6feb; color:#fff; }
+  .actions button.alt { background:#e8eef9; color:#1f6feb; }
+  @media print {
+    header, .actions { display:none !important; }
+    body { background:#fff; padding:0; }
+    #content { margin:0; padding:0; }
+  }
+</style>
+</head>
+<body>
+
+<header>My App</header>
+
+<!-- ↓↓ உங்கள் HTML உள்ளடக்கத்தை இந்த div உள்ளே ஒட்டவும் (இதுவே Print / PDF ஆகும்) ↓↓ -->
+<div id="content">
+  <h1>Invoice #1024</h1>
+  <p>Customer: Alex Morgan</p>
+  <table>
+    <tr><th>Item</th><th>Qty</th><th>Price</th></tr>
+    <tr><td>Notebook</td><td>2</td><td>$12.00</td></tr>
+    <tr><td>Pen set</td><td>1</td><td>$8.50</td></tr>
+  </table>
+</div>
+<!-- ↑↑ -->
+
+<div class="actions">
+  <button id="btnPdf">Download PDF</button>
+  <button id="btnPrint" class="alt">Print</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script>
+  const pdfOptions = {
+    margin: 10,
+    filename: 'document.pdf',
+    image: { type: 'jpeg', quality: 0.95 },
+    html2canvas: { scale: 2, useCORS: true },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+  };
+
+  function printPage() {
+    if (window.AndroidApp) AndroidApp.printPage();
+    else window.print();
+  }
+
+  async function downloadPdf() {
+    const element = document.getElementById('content');
+    if (window.AndroidApp) {
+      const dataUri = await html2pdf().set(pdfOptions).from(element).outputPdf('datauristring');
+      AndroidApp.savePdf(dataUri.split(',')[1], pdfOptions.filename);
+    } else {
+      await html2pdf().set(pdfOptions).from(element).save();
+    }
+  }
+
+  document.getElementById('btnPrint').addEventListener('click', printPage);
+  document.getElementById('btnPdf').addEventListener('click', downloadPdf);
+</script>
+</body>
+</html>
