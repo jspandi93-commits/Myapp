@@ -1,0 +1,226 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Create Android project
+        run: |
+          P=android
+          mkdir -p $P/app/src/main/java/com/example/myapp $P/app/src/main/assets
+
+          cat > $P/settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "MyApp"
+          include(":app")
+          EOF
+
+          cat > $P/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          cat > $P/gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2g
+          EOF
+
+          cat > $P/app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.example.myapp"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.example.myapp"
+                  minSdk = 29
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("androidx.appcompat:appcompat:1.7.0")
+          }
+          EOF
+
+          cat > $P/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:label="My App"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > $P/app/src/main/java/com/example/myapp/MainActivity.kt <<'EOF'
+          package com.example.myapp
+
+          import android.content.ContentValues
+          import android.content.Context
+          import android.os.Bundle
+          import android.os.Environment
+          import android.print.PrintAttributes
+          import android.print.PrintManager
+          import android.provider.MediaStore
+          import android.util.Base64
+          import android.webkit.JavascriptInterface
+          import android.webkit.JsResult
+          import android.webkit.WebChromeClient
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.Toast
+          import androidx.appcompat.app.AlertDialog
+          import androidx.appcompat.app.AppCompatActivity
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var webView: WebView
+              private var printView: WebView? = null
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  webView = WebView(this)
+                  setContentView(webView)
+                  webView.settings.javaScriptEnabled = true
+                  webView.settings.domStorageEnabled = true
+                  webView.webViewClient = WebViewClient()
+
+                  // alert() and confirm() messages from the HTML page
+                  webView.webChromeClient = object : WebChromeClient() {
+                      override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+                          AlertDialog.Builder(this@MainActivity)
+                              .setMessage(message)
+                              .setPositiveButton("OK") { _, _ -> result.confirm() }
+                              .setOnCancelListener { result.cancel() }
+                              .show()
+                          return true
+                      }
+                      override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+                          AlertDialog.Builder(this@MainActivity)
+                              .setMessage(message)
+                              .setPositiveButton("OK") { _, _ -> result.confirm() }
+                              .setNegativeButton("Cancel") { _, _ -> result.cancel() }
+                              .setOnCancelListener { result.cancel() }
+                              .show()
+                          return true
+                      }
+                  }
+
+                  webView.addJavascriptInterface(AndroidBridge(), "AndroidApp")
+                  webView.loadUrl("file:///android_asset/index.html")
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onBackPressed() {
+                  if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+              }
+
+              inner class AndroidBridge {
+
+                  // PRINT: the page sends the HTML it wants to print
+                  @JavascriptInterface
+                  fun printHtml(html: String) {
+                      runOnUiThread {
+                          val wv = WebView(this@MainActivity)
+                          printView = wv
+                          var started = false
+                          wv.webViewClient = object : WebViewClient() {
+                              override fun onPageFinished(view: WebView, url: String?) {
+                                  if (started) return
+                                  started = true
+                                  val size = if (html.contains("landscape", ignoreCase = true))
+                                      PrintAttributes.MediaSize.ISO_A4.asLandscape()
+                                  else
+                                      PrintAttributes.MediaSize.ISO_A4
+                                  val pm = getSystemService(Context.PRINT_SERVICE) as PrintManager
+                                  pm.print(
+                                      "Document",
+                                      view.createPrintDocumentAdapter("Document"),
+                                      PrintAttributes.Builder().setMediaSize(size).build()
+                                  )
+                              }
+                          }
+                          wv.loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
+                      }
+                  }
+
+                  // DOWNLOAD: saves the PDF into the Downloads folder (Android 10+)
+                  @JavascriptInterface
+                  fun savePdf(base64Data: String, fileName: String) {
+                      try {
+                          val safeName = fileName.replace(Regex("[^\\p{L}\\p{N}._ -]"), "_")
+                          val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+                          val values = ContentValues().apply {
+                              put(MediaStore.Downloads.DISPLAY_NAME, safeName)
+                              put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                              put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                          }
+                          val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                          if (uri != null) {
+                              contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                              toast("PDF சேமிக்கப்பட்டது: Downloads/" + safeName)
+                          } else {
+                              toast("PDF சேமிக்க முடியவில்லை")
+                          }
+                      } catch (e: Exception) {
+                          toast("பிழை: " + e.message)
+                      }
+                  }
+
+                  private fun toast(msg: String) {
+                      runOnUiThread { Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show() }
+                  }
+              }
+          }
+          EOF
+
+      - name: Copy web files into the app
+        run: rsync -a --exclude='.git' --exclude='.github' --exclude='android' --exclude='*.yml' ./ android/app/src/main/assets/
+
+      - name: Build APK
+        working-directory: android
+        run: gradle assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MyApp-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
